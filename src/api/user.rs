@@ -1,5 +1,6 @@
 use actix_web::{web, HttpResponse};
 use time::OffsetDateTime;
+use utoipa::ToSchema;
 use uuid::Uuid;
 use sqlx::PgPool;
 use bcrypt::{hash, verify, DEFAULT_COST};
@@ -10,8 +11,8 @@ use std::collections::HashMap;
 
 use crate::db::models::User;  // Import user model
 
-#[derive(Deserialize)]
-struct CreateUser {
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct CreateUser {
     email: String,
     password: String,
 }
@@ -33,12 +34,22 @@ struct Claims {
     exp: usize, // Expiration timestamp
 }
 
+
 // POST /users - Create a new user (register)
-async fn create_user(
-    user_data: web::Json<User>,  // Use `User` struct for creation
+#[utoipa::path(
+    post,
+    path = "/users",
+    request_body = CreateUser,
+    responses(
+        (status = 201, description = "User created successfully", body = String),
+        (status = 400, description = "Bad request")
+    )
+)]
+pub async fn create_user(
+    user_data: web::Json<CreateUser>,  // Now, this holds the plain password
     db: web::Data<PgPool>,
 ) -> HttpResponse {
-    let hashed_password = match hash(&user_data.password_hash, DEFAULT_COST) {
+    let hashed_password = match hash(&user_data.password, DEFAULT_COST) {  // Hashing plain password
         Ok(h) => h,
         Err(_) => return HttpResponse::InternalServerError().json("Error hashing password"),
     };
@@ -48,7 +59,7 @@ async fn create_user(
     let result = sqlx::query!(
         "INSERT INTO users (email, password_hash, verification_token) VALUES ($1, $2, $3)",
         user_data.email,
-        hashed_password,
+        hashed_password,  // Store the hashed password
         verification_token
     )
     .execute(db.get_ref())
@@ -58,22 +69,23 @@ async fn create_user(
         Ok(_) => {
             // Send verification email with token
             let email = Message::builder()
-                .from("noreply@yourapp.com".parse().unwrap())
+                .from("ayoub.achak01@gmail.com".parse().unwrap())
                 .to(user_data.email.parse().unwrap())
                 .subject("Verify your email")
-                .body(format!("Please verify your email by clicking the link: http://yourapp.com/verify?token={}", verification_token))
+                .body(format!("Please verify your email by clicking the link: http://127.0.0.1:8080/verify?token={}", verification_token))
                 .unwrap();
 
             let mailer = SmtpTransport::unencrypted_localhost();
             
             match mailer.send(&email) {
-                Ok(_) => HttpResponse::Ok().json("User created. Check your email for verification."),
+                Ok(_) => HttpResponse::Created().json("User created. Check your email for verification."),  // Use 201 status code
                 Err(e) => HttpResponse::InternalServerError().json(format!("Failed to send verification email: {}", e)),
             }
         }
         Err(_) => HttpResponse::InternalServerError().json("Error creating user"),
     }
 }
+
 
 
 #[derive(Serialize, Deserialize)]

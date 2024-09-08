@@ -1,46 +1,88 @@
 use actix_web::{web, HttpResponse};
+use serde::{Deserialize, Serialize};
+use sqlx::PgPool;
+use utoipa::ToSchema;
 use uuid::Uuid;
-use crate::db::models::{CreateNotification, Notification};  // Import models
-use crate::services::notification;  // Import the service function
+use crate::db::models::Notification;
+use crate::services::notification;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
+use crate::auth::extractor::AuthenticatedUser;
 
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct CreateNotification {
+    pub user_id: String,
+    pub content: String,
+    pub send_at: Option<String>,
+}
 
-async fn create_notification(
+#[derive(ToSchema, Serialize)]
+pub struct NotificationResponse {
+    pub success: bool,
+    pub message: String,
+    pub notification: Option<Notification>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/notifications",
+    request_body = CreateNotification,
+    responses(
+        (status = 200, description = "Notification created", body = NotificationResponse),
+        (status = 400, description = "Bad request"),
+        (status = 401, description = "Unauthorized")
+    ),
+    security(
+        ("BearerAuth" = [])
+    )
+)]
+pub async fn create_notification(
     notification_data: web::Json<CreateNotification>,
-    db: web::Data<sqlx::PgPool>,
+    db: web::Data<PgPool>,
+    auth_user: AuthenticatedUser  // Bearer authentication
 ) -> HttpResponse {
-    // Convert user_id from String to Uuid
     let user_id = match Uuid::parse_str(&notification_data.user_id) {
         Ok(uuid) => uuid,
-        Err(_) => return HttpResponse::BadRequest().json("Invalid UUID"),
+        Err(_) => return HttpResponse::BadRequest().json(NotificationResponse {
+            success: false,
+            message: "Invalid UUID".to_string(),
+            notification: None,
+        }),
     };
 
-    // Convert send_at from Option<String> to Option<OffsetDateTime>
     let send_at = match &notification_data.send_at {
         Some(send_at_str) => {
             match OffsetDateTime::parse(send_at_str, &Rfc3339) {
                 Ok(datetime) => Some(datetime),
-                Err(_) => return HttpResponse::BadRequest().json("Invalid date format"),
+                Err(_) => return HttpResponse::BadRequest().json(NotificationResponse {
+                    success: false,
+                    message: "Invalid date format".to_string(),
+                    notification: None,
+                }),
             }
         }
         None => None,
     };
 
-    // Create a new Notification with the converted types
     let new_notification = Notification {
         user_id,
         content: notification_data.content.clone(),
-        send_at,  // Use the converted Option<OffsetDateTime>
+        send_at,
     };
 
-    // Call the service layer function, passing the new_notification
-    match notification::create_notification(db.get_ref(), new_notification).await {
-        Ok(_) => HttpResponse::Ok().json("Notification created"),
-        Err(_) => HttpResponse::InternalServerError().json("Failed to create notification"),
+    match notification::create_notification(db.get_ref(), new_notification.clone()).await {
+        Ok(_) => HttpResponse::Ok().json(NotificationResponse {
+            success: true,
+            message: "Notification created".to_string(),
+            notification: Some(new_notification),
+        }),
+        Err(_) => HttpResponse::InternalServerError().json(NotificationResponse {
+            success: false,
+            message: "Failed to create notification".to_string(),
+            notification: None,
+        }),
     }
 }
-
 
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/notifications", web::post().to(create_notification));

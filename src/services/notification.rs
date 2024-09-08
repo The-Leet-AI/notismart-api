@@ -4,9 +4,9 @@ use sqlx::PgPool;
 
 pub async fn create_notification(
     pool: &PgPool,
-    notification: Notification, // Use Notification type here
+    notification: Notification,
 ) -> Result<(), sqlx::Error> {
-    info!("Creating notification for user: {}", notification.user_id);  // Log the action
+    info!("Creating notification for user: {}", notification.user_id);
 
     let result = sqlx::query!(
         "INSERT INTO notifications (user_id, content, send_at, status) 
