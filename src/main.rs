@@ -1,26 +1,34 @@
 use actix_web::{web, App, HttpServer};
-use sqlx::postgres::PgPoolOptions;
 use dotenv::dotenv;
-use std::env;
+use env_logger::Env;  // For environment-based logging
+
+mod api;
+mod db;
+mod services;
+mod config;
+
+use config::load_config;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // Load .env variables
     dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await
-        .expect("Failed to create pool.");
+    // Initialize the logger, with optional RUST_LOG configuration from the environment
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+
+    // Load other configurations and set up the connection pool
+    load_config();
+    let pool = db::connect().await.expect("Failed to connect to the database");
+
+    log::info!("Starting HTTP server at http://127.0.0.1:8080");  // Logging startup info
 
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(pool.clone()))
-            .service(web::scope("/api")
-            )
+            .configure(api::init_routes)
     })
-    .bind(("127.0.0.1", 8080))?
+    .bind("127.0.0.1:8080")?
     .run()
     .await
 }
