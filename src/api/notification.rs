@@ -28,10 +28,11 @@ pub struct NotificationResponse {
     path = "/api/notifications",
     request_body = CreateNotification,
     responses(
-        (status = 200, description = "Notification created", body = NotificationResponse),
-        (status = 400, description = "Bad request"),
+        (status = 200, description = "Notification successfully created", body = NotificationResponse),
+        (status = 400, description = "Invalid input"),
         (status = 401, description = "Unauthorized")
     ),
+    tag = "Notification API",
     security(
         ("BearerAuth" = [])
     )
@@ -39,29 +40,16 @@ pub struct NotificationResponse {
 pub async fn create_notification(
     notification_data: web::Json<CreateNotification>,
     db: web::Data<PgPool>,
-    auth_user: AuthenticatedUser  // Bearer authentication
+    auth_user: AuthenticatedUser,  // Bearer authentication
 ) -> HttpResponse {
     let user_id = match Uuid::parse_str(&notification_data.user_id) {
         Ok(uuid) => uuid,
-        Err(_) => return HttpResponse::BadRequest().json(NotificationResponse {
-            success: false,
-            message: "Invalid UUID".to_string(),
-            notification: None,
-        }),
+        Err(_) => return invalid_uuid_response(),
     };
 
-    let send_at = match &notification_data.send_at {
-        Some(send_at_str) => {
-            match OffsetDateTime::parse(send_at_str, &Rfc3339) {
-                Ok(datetime) => Some(datetime),
-                Err(_) => return HttpResponse::BadRequest().json(NotificationResponse {
-                    success: false,
-                    message: "Invalid date format".to_string(),
-                    notification: None,
-                }),
-            }
-        }
-        None => None,
+    let send_at = match parse_send_at(&notification_data.send_at) {
+        Ok(datetime) => datetime,
+        Err(err_response) => return err_response,
     };
 
     let new_notification = Notification {
@@ -76,13 +64,40 @@ pub async fn create_notification(
             message: "Notification created".to_string(),
             notification: Some(new_notification),
         }),
-        Err(_) => HttpResponse::InternalServerError().json(NotificationResponse {
-            success: false,
-            message: "Failed to create notification".to_string(),
-            notification: None,
-        }),
+        Err(_) => internal_server_error(),
     }
 }
+
+fn parse_send_at(send_at_str: &Option<String>) -> Result<Option<OffsetDateTime>, HttpResponse> {
+    match send_at_str {
+        Some(date) => match OffsetDateTime::parse(date, &Rfc3339) {
+            Ok(datetime) => Ok(Some(datetime)),
+            Err(_) => Err(HttpResponse::BadRequest().json(NotificationResponse {
+                success: false,
+                message: "Invalid date format".to_string(),
+                notification: None,
+            })),
+        },
+        None => Ok(None),
+    }
+}
+
+fn invalid_uuid_response() -> HttpResponse {
+    HttpResponse::BadRequest().json(NotificationResponse {
+        success: false,
+        message: "Invalid UUID".to_string(),
+        notification: None,
+    })
+}
+
+fn internal_server_error() -> HttpResponse {
+    HttpResponse::InternalServerError().json(NotificationResponse {
+        success: false,
+        message: "Failed to create notification".to_string(),
+        notification: None,
+    })
+}
+
 
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
     cfg.route("/notifications", web::post().to(create_notification));

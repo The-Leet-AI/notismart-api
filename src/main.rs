@@ -11,22 +11,37 @@ mod db;
 mod services;
 mod config;
 
-
 use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(api::user::create_user, api::notification::create_notification),
+    paths(
+        api::user::create_user,
+        api::user::login,
+        api::user::get_user,
+        api::user::update_user,
+        api::user::delete_user,
+        api::user::verify_email,
+        api::notification::create_notification
+    ),
     components(
-        schemas(api::user::CreateUser, api::notification::CreateNotification, api::notification::NotificationResponse, db::models::Notification)
+        schemas(
+            api::user::CreateUser, 
+            api::user::LoginRequest, 
+            api::user::UserGet, 
+            api::notification::CreateNotification, 
+            api::notification::NotificationResponse, 
+            db::models::Notification
+        )
     ),
     tags(
-        (name = "User API", description = "User-related endpoints"),
-        (name = "Notification API", description = "Notification-related endpoints")
+        (name = "User API", description = "User-related endpoints for account management, login, and registration."),
+        (name = "Notification API", description = "Notification management endpoints for creating and retrieving notifications.")
     ),
     modifiers(&SecurityAddon)
 )]
 struct ApiDoc;
+
 
 struct SecurityAddon;
 
@@ -44,17 +59,14 @@ impl Modify for SecurityAddon {
     }
 }
 
-
-
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    load_config();
-    let pool = db::connect().await.expect("Failed to connect to the database");
-
+    let config = load_config();
+    let pool = db::connect(&config.database_url).await.expect("Failed to connect to the database");
+    
     let openapi = ApiDoc::openapi(); // Generate OpenAPI specification
 
     log::info!("Starting server on http://127.0.0.1:8080");

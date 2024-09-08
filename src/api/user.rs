@@ -22,8 +22,8 @@ struct UpdateUser {
     email: String,
 }
 
-#[derive(Deserialize)]
-struct LoginRequest {
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct LoginRequest {
     email: String,
     password: String,
 }
@@ -38,12 +38,13 @@ struct Claims {
 // POST /users - Create a new user (register)
 #[utoipa::path(
     post,
-    path = "/users",
+    path = "/api/users",
     request_body = CreateUser,
     responses(
-        (status = 201, description = "User created successfully", body = String),
-        (status = 400, description = "Bad request")
-    )
+        (status = 201, description = "User successfully created", body = String),
+        (status = 400, description = "Bad request due to invalid input")
+    ),
+    tag = "User API"
 )]
 pub async fn create_user(
     user_data: web::Json<CreateUser>,  // Now, this holds the plain password
@@ -88,7 +89,7 @@ pub async fn create_user(
 
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct UserGet {
     pub id: Uuid,
     pub email: String,
@@ -99,6 +100,18 @@ pub struct UserGet {
 }
 
 // GET /users/{id} - Fetch a user by ID
+#[utoipa::path(
+    get,
+    path = "/api/users/{id}",
+    responses(
+        (status = 200, description = "User retrieved successfully", body = UserGet),
+        (status = 404, description = "User not found")
+    ),
+    params(
+        ("id" = Uuid, Path, description = "ID of the User to retrieve")
+    ),
+    tag = "User API"
+)]
 async fn get_user(
     user_id: web::Path<Uuid>,
     db: web::Data<PgPool>,
@@ -124,6 +137,19 @@ struct UpdateUserRequest {
 }
 
 // PUT /users/{id} - Update a user’s email or phone number
+#[utoipa::path(
+    put,
+    path = "/api/users/{id}",
+    request_body = UpdateUserRequest,
+    responses(
+        (status = 200, description = "User updated successfully"),
+        (status = 500, description = "Error updating user")
+    ),
+    params(
+        ("id" = Uuid, Path, description = "ID of the User to update")
+    ),
+    tag = "User API"
+)]
 async fn update_user(
     user_id: web::Path<Uuid>,
     user_data: web::Json<UpdateUserRequest>,
@@ -150,6 +176,18 @@ async fn update_user(
 
 
 // DELETE /users/{id} - Delete a user by ID
+#[utoipa::path(
+    delete,
+    path = "/api/users/{id}",
+    responses(
+        (status = 200, description = "User deleted successfully"),
+        (status = 500, description = "Error deleting user")
+    ),
+    params(
+        ("id" = Uuid, Path, description = "ID of the User to delete")
+    ),
+    tag = "User API"
+)]
 async fn delete_user(
     user_id: web::Path<Uuid>,
     db: web::Data<PgPool>,
@@ -165,6 +203,19 @@ async fn delete_user(
 }
 
 // POST /verify?token=<verification_token>
+#[utoipa::path(
+    post,
+    path = "/api/verify",
+    responses(
+        (status = 200, description = "Email verified successfully"),
+        (status = 400, description = "Invalid token format"),
+        (status = 500, description = "Error verifying email")
+    ),
+    params(
+        ("token" = String, Query, description = "Email verification token")
+    ),
+    tag = "User API"
+)]
 async fn verify_email(
     query: web::Query<HashMap<String, String>>,  // Token passed as a query param
     db: web::Data<PgPool>
@@ -206,6 +257,16 @@ struct UserLogin {
 }
 
 // POST /login - Authenticate a user, check if email is verified
+#[utoipa::path(
+    post,
+    path = "/api/login",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Successful login", body = String),
+        (status = 401, description = "Invalid credentials")
+    ),
+    tag = "User API"
+)]
 async fn login(
     login_data: web::Json<LoginRequest>,
     db: web::Data<PgPool>,

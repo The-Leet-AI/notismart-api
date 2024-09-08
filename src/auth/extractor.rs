@@ -16,24 +16,28 @@ impl FromRequest for AuthenticatedUser {
     fn from_request(req: &HttpRequest, _: &mut Payload) -> Self::Future {
         if let Some(auth_header) = req.headers().get("Authorization") {
             if let Ok(auth_str) = auth_header.to_str() {
-                if auth_str.starts_with("Bearer ") {
-                    let token = auth_str.trim_start_matches("Bearer ").trim();
-                    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
-
-                    let token_data: Result<TokenData<AuthenticatedUser>, _> = decode::<AuthenticatedUser>(
-                        token,
-                        &DecodingKey::from_secret(secret.as_ref()),
-                        &Validation::default(),
-                    );
-
-                    if let Ok(data) = token_data {
-                        return ok(data.claims);  // Return the valid AuthenticatedUser
-                    }
+                if let Some(token) = extract_bearer_token(auth_str) {
+                    return decode_jwt(token);
                 }
             }
         }
 
-        // Return the unauthorized error directly as Err
         err(actix_web::error::ErrorUnauthorized("Invalid or missing JWT token"))
+    }
+}
+
+fn extract_bearer_token(auth_str: &str) -> Option<&str> {
+    if auth_str.starts_with("Bearer ") {
+        Some(auth_str.trim_start_matches("Bearer ").trim())
+    } else {
+        None
+    }
+}
+
+fn decode_jwt(token: &str) -> Ready<Result<AuthenticatedUser, actix_web::Error>> {
+    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    match decode::<AuthenticatedUser>(&token, &DecodingKey::from_secret(secret.as_ref()), &Validation::default()) {
+        Ok(data) => ok(data.claims),
+        Err(_) => err(actix_web::error::ErrorUnauthorized("Invalid or expired JWT token")),
     }
 }
