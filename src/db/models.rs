@@ -25,6 +25,10 @@ pub struct User {
     pub id: Uuid,
     pub email: String,
     pub password_hash: String,
-    pub phone_number: Option<String>,
-    pub created_at: Option<OffsetDateTime>,   
+    pub phone_number: Option<String>,  // Optional phone number field
+    pub email_verified: Option<bool>,  // Track if the email is verified
+    pub verification_token: Option<Uuid>,  // Token for email verification
+    pub phone_verified: Option<bool>,  // Track if the phone number is verified
+    pub phone_verification_code: Option<String>,  // Code for phone verification (optional)
+    pub created_at: Option<OffsetDateTime>,  // Timestamp for user creation
 }
