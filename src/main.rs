@@ -3,61 +3,16 @@ use actix_cors::Cors;
 use dotenv::dotenv;
 use env_logger::Env;
 use config::load_config;
-use utoipa::{Modify, OpenApi};
 use utoipa_swagger_ui::SwaggerUi;
+use utoipa::OpenApi; // This imports the OpenApi trait that provides the `openapi()` method.
+use swagger::ApiDoc;  // Adjust the module import to where you have defined `ApiDoc`.
+
 mod auth;
 mod api;
 mod db;
 mod services;
 mod config;
-
-use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
-
-#[derive(OpenApi)]
-#[openapi(
-    paths(
-        api::user::create_user,
-        api::user::login,
-        api::user::get_user,
-        api::user::update_user,
-        api::user::delete_user,
-        api::user::verify_email,
-        api::notification::create_notification
-    ),
-    components(
-        schemas(
-            api::user::CreateUser, 
-            api::user::LoginRequest, 
-            api::user::UserGet, 
-            api::notification::CreateNotification, 
-            api::notification::NotificationResponse, 
-            db::models::Notification
-        )
-    ),
-    tags(
-        (name = "User API", description = "User-related endpoints for account management, login, and registration."),
-        (name = "Notification API", description = "Notification management endpoints for creating and retrieving notifications.")
-    ),
-    modifiers(&SecurityAddon)
-)]
-struct ApiDoc;
-
-
-struct SecurityAddon;
-
-impl Modify for SecurityAddon {
-    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
-        openapi.components.as_mut().unwrap().add_security_scheme(
-            "BearerAuth",
-            SecurityScheme::Http(
-                HttpBuilder::new()
-                    .scheme(HttpAuthScheme::Bearer)
-                    .bearer_format("JWT")
-                    .build(),
-            ),
-        );
-    }
-}
+mod swagger;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -67,7 +22,7 @@ async fn main() -> std::io::Result<()> {
     let config = load_config();
     let pool = db::connect(&config.database_url).await.expect("Failed to connect to the database");
     
-    let openapi = ApiDoc::openapi(); // Generate OpenAPI specification
+    let openapi = swagger::ApiDoc::openapi();  // Generate OpenAPI specification from the new file
 
     log::info!("Starting server on http://127.0.0.1:8080");
 

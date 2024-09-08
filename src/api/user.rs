@@ -23,6 +23,33 @@ struct UpdateUser {
 }
 
 #[derive(Serialize, Deserialize, ToSchema)]
+pub struct UserGet {
+    pub id: Uuid,
+    pub email: String,
+    pub phone_number: Option<String>,  // Optional phone number field
+    pub email_verified: Option<bool>,  // Track if the email is verified
+    pub phone_verified: Option<bool>,  // Track if the phone number is verified
+    pub created_at: Option<OffsetDateTime>,  // Timestamp for user creation
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct UpdateUserRequest {
+    email: Option<String>,
+    phone_number: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, ToSchema)]
+pub struct UserLogin {
+    pub id: Uuid,
+    pub email: String,
+    pub password_hash: String,
+    pub email_verified: Option<bool>,
+    pub phone_verified: Option<bool>,
+    pub created_at: Option<OffsetDateTime>,
+}
+
+
+#[derive(Serialize, Deserialize, ToSchema)]
 pub struct LoginRequest {
     email: String,
     password: String,
@@ -88,17 +115,6 @@ pub async fn create_user(
 }
 
 
-
-#[derive(Serialize, Deserialize, ToSchema)]
-pub struct UserGet {
-    pub id: Uuid,
-    pub email: String,
-    pub phone_number: Option<String>,  // Optional phone number field
-    pub email_verified: Option<bool>,  // Track if the email is verified
-    pub phone_verified: Option<bool>,  // Track if the phone number is verified
-    pub created_at: Option<OffsetDateTime>,  // Timestamp for user creation
-}
-
 // GET /users/{id} - Fetch a user by ID
 #[utoipa::path(
     get,
@@ -130,11 +146,6 @@ async fn get_user(
     }
 }
 
-#[derive(Deserialize)]
-struct UpdateUserRequest {
-    email: Option<String>,
-    phone_number: Option<String>,
-}
 
 // PUT /users/{id} - Update a user’s email or phone number
 #[utoipa::path(
@@ -174,7 +185,6 @@ async fn update_user(
 }
 
 
-
 // DELETE /users/{id} - Delete a user by ID
 #[utoipa::path(
     delete,
@@ -201,6 +211,7 @@ async fn delete_user(
         Err(_) => HttpResponse::InternalServerError().json("Error deleting user"),
     }
 }
+
 
 // POST /verify?token=<verification_token>
 #[utoipa::path(
@@ -247,15 +258,6 @@ async fn verify_email(
 }
 
 
-struct UserLogin {
-    pub id: Uuid,
-    pub email: String,
-    pub password_hash: String,
-    pub email_verified: Option<bool>,
-    pub phone_verified: Option<bool>,
-    pub created_at: Option<OffsetDateTime>,
-}
-
 // POST /login - Authenticate a user, check if email is verified
 #[utoipa::path(
     post,
@@ -292,6 +294,9 @@ async fn login(
             }
 
             // Generate JWT (assuming JWT generation logic here)
+            let expiration = chrono::Utc::now();
+            
+            // Generate JWT (assuming JWT generation logic here)
             let expiration = chrono::Utc::now()
                 .checked_add_signed(chrono::Duration::hours(24))
                 .expect("valid timestamp")
@@ -318,6 +323,17 @@ async fn login(
 
 
 // POST /resend-verification - Resend verification email
+#[utoipa::path(
+    post,
+    path = "/api/resend-verification",
+    request_body = LoginRequest,
+    responses(
+        (status = 200, description = "Verification email resent successfully"),
+        (status = 404, description = "User not found"),
+        (status = 500, description = "Error sending verification email")
+    ),
+    tag = "User API"
+)]
 async fn resend_verification_email(
     user_data: web::Json<LoginRequest>,  // Use the email input from the user
     db: web::Data<PgPool>,
@@ -385,4 +401,3 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
     .route("/verify", web::post().to(verify_email))  // POST /verify
     .route("/resend-verification", web::post().to(resend_verification_email));  // POST /resend-verification
 }
-
