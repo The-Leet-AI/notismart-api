@@ -6,10 +6,10 @@ use sqlx::PgPool;
 use bcrypt::{hash, verify, DEFAULT_COST};
 use jsonwebtoken::{encode, Header, EncodingKey};
 use serde::{Serialize, Deserialize};
-use lettre::{SmtpTransport, Message, Transport};
+use lettre::{transport::smtp::authentication::Credentials, Message, SmtpTransport, Transport};
 use std::collections::HashMap;
 
-use crate::db::models::User;  // Import user model
+use crate::{config::Config, db::models::User};  // Import user model
 
 #[derive(Serialize, Deserialize, ToSchema)]
 pub struct CreateUser {
@@ -76,6 +76,7 @@ struct Claims {
 pub async fn create_user(
     user_data: web::Json<CreateUser>,  // Now, this holds the plain password
     db: web::Data<PgPool>,
+    config: web::Data<Config>, // Add config to retrieve SMTP settings
 ) -> HttpResponse {
     let hashed_password = match hash(&user_data.password, DEFAULT_COST) {  // Hashing plain password
         Ok(h) => h,
@@ -97,14 +98,19 @@ pub async fn create_user(
         Ok(_) => {
             // Send verification email with token
             let email = Message::builder()
-                .from("ayoub.achak01@gmail.com".parse().unwrap())
+                .from(config.smtp_username.parse().unwrap())
                 .to(user_data.email.parse().unwrap())
                 .subject("Verify your email")
-                .body(format!("Please verify your email by clicking the link: http://127.0.0.1:8080/verify?token={}", verification_token))
+                .body(format!("Please verify your email by clicking the link: http://127.0.0.1:8080/api/verify?token={}", verification_token))
                 .unwrap();
 
-            let mailer = SmtpTransport::unencrypted_localhost();
-            
+            let creds = Credentials::new(config.smtp_username.clone(), config.smtp_password.clone());
+
+            let mailer = SmtpTransport::starttls_relay(&config.smtp_server)
+                .unwrap()  // Ensure the SMTP server address is correct
+                .credentials(creds)
+                .build();
+
             match mailer.send(&email) {
                 Ok(_) => HttpResponse::Created().json("User created. Check your email for verification."),  // Use 201 status code
                 Err(e) => HttpResponse::InternalServerError().json(format!("Failed to send verification email: {}", e)),
@@ -213,7 +219,6 @@ async fn delete_user(
 }
 
 
-// POST /verify?token=<verification_token>
 #[utoipa::path(
     post,
     path = "/api/verify",
@@ -228,12 +233,17 @@ async fn delete_user(
     tag = "User API"
 )]
 async fn verify_email(
-    query: web::Query<HashMap<String, String>>,  // Token passed as a query param
-    db: web::Data<PgPool>
+    query: Option<web::Query<HashMap<String, String>>>,  // Handle GET query parameters
+    body: Option<web::Json<HashMap<String, String>>>,    // Handle POST body data
+    db: web::Data<PgPool>,
 ) -> HttpResponse {
-    if let Some(token_str) = query.get("token") {
-        // Parse token from String to Uuid
-        match Uuid::parse_str(token_str) {
+    // Extract the token either from query parameters (GET) or body (POST)
+    let token_str = query
+        .and_then(|q| q.get("token").cloned())  // GET: token from query
+        .or_else(|| body.and_then(|b| b.get("token").cloned()));  // POST: token from body
+
+    if let Some(token_str) = token_str {
+        match Uuid::parse_str(&token_str) {
             Ok(token) => {
                 let result = sqlx::query!(
                     "UPDATE users SET email_verified = TRUE WHERE verification_token = $1",
@@ -246,16 +256,15 @@ async fn verify_email(
                     Ok(_) => HttpResponse::Ok().json("Email verified successfully"),
                     Err(_) => HttpResponse::InternalServerError().json("Invalid or expired verification token"),
                 }
-            },
-            Err(_) => {
-                // Log or return a clear error message when the token format is invalid
-                HttpResponse::BadRequest().json("Invalid token format")
             }
+            Err(_) => HttpResponse::BadRequest().json("Invalid token format"),
         }
     } else {
         HttpResponse::BadRequest().json("Verification token is missing")
     }
 }
+
+
 
 
 // POST /login - Authenticate a user, check if email is verified
@@ -273,52 +282,57 @@ async fn login(
     login_data: web::Json<LoginRequest>,
     db: web::Data<PgPool>,
 ) -> HttpResponse {
-    let user = sqlx::query_as!(
+    // Fetch the user by email
+    let user = match sqlx::query_as!(
         UserLogin,
         "SELECT id, email, password_hash, email_verified, phone_verified, created_at FROM users WHERE email = $1",
         login_data.email
     )
     .fetch_one(db.get_ref())
-    .await;
+    .await {
+        Ok(user) => user,
+        Err(_) => return HttpResponse::Unauthorized().json("Invalid email or password"),
+    };
 
-    match user {
-        Ok(user) => {
-            // Check if email is verified
-            if !user.email_verified.unwrap_or(false) {
-                return HttpResponse::Unauthorized().json("Please verify your email before logging in");
-            }
+    // Check if the email is verified
+    if !user.email_verified.unwrap_or(false) {
+        return HttpResponse::Unauthorized().json("Please verify your email before logging in");
+    }
 
-            // Verify the password
-            if verify(&login_data.password, &user.password_hash).is_err() {
+    // Verify the password using bcrypt::verify
+    let is_password_valid = verify(&login_data.password, &user.password_hash);
+    match is_password_valid {
+        Ok(is_valid) => {
+            if !is_valid {
                 return HttpResponse::Unauthorized().json("Invalid email or password");
             }
-
-            // Generate JWT (assuming JWT generation logic here)
-            let expiration = chrono::Utc::now();
-            
-            // Generate JWT (assuming JWT generation logic here)
-            let expiration = chrono::Utc::now()
-                .checked_add_signed(chrono::Duration::hours(24))
-                .expect("valid timestamp")
-                .timestamp() as usize;
-
-            let claims = Claims {
-                sub: user.id,
-                exp: expiration,
-            };
-
-            let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
-            let token = encode(
-                &Header::default(),
-                &claims,
-                &EncodingKey::from_secret(secret.as_ref()),  // Use the secret from env
-            )
-            .expect("Token creation failed");
-
-            HttpResponse::Ok().json(token)
         }
-        Err(_) => HttpResponse::Unauthorized().json("Invalid email or password"),
+        Err(_) => {
+            return HttpResponse::Unauthorized().json("Invalid email or password");
+        }
     }
+
+
+    // Generate JWT token if password is valid
+    let expiration = chrono::Utc::now()
+        .checked_add_signed(chrono::Duration::hours(24))
+        .expect("valid timestamp")
+        .timestamp() as usize;
+
+    let claims = Claims {
+        sub: user.id,
+        exp: expiration,
+    };
+
+    let secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+    let token = encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(secret.as_ref()),
+    )
+    .expect("Token creation failed");
+
+    HttpResponse::Ok().json(token)
 }
 
 
@@ -334,13 +348,14 @@ async fn login(
     ),
     tag = "User API"
 )]
-async fn resend_verification_email(
+pub async fn resend_verification_email(
     user_data: web::Json<LoginRequest>,  // Use the email input from the user
     db: web::Data<PgPool>,
+    config: web::Data<Config>, // Add config to retrieve SMTP settings
 ) -> HttpResponse {
     // Fetch the user from the database using their email
     let user = sqlx::query!(
-        "SELECT id, email, email_verified FROM users WHERE email = $1",
+        "SELECT id, email, email_verified, verification_token FROM users WHERE email = $1",
         user_data.email
     )
     .fetch_one(db.get_ref())
@@ -353,13 +368,15 @@ async fn resend_verification_email(
                 return HttpResponse::Ok().json("Email is already verified");
             }
 
-            // Generate a new verification token
-            let new_verification_token = Uuid::new_v4();
+            let verification_token = match user.verification_token {
+                Some(token) => token, // Use existing token if available
+                None => Uuid::new_v4(), // Generate a new token if missing
+            };
 
-            // Update the user's verification token in the database
+            // Update the user's verification token in the database if it was missing
             let result = sqlx::query!(
                 "UPDATE users SET verification_token = $1 WHERE email = $2",
-                new_verification_token,
+                verification_token,
                 user_data.email
             )
             .execute(db.get_ref())
@@ -371,13 +388,19 @@ async fn resend_verification_email(
 
             // Send the new verification email
             let email = Message::builder()
-                .from("noreply@yourapp.com".parse().unwrap())
+                .from(config.smtp_username.parse().unwrap())
                 .to(user_data.email.parse().unwrap())
                 .subject("Resend Verification Email")
-                .body(format!("Please verify your email by clicking this link: http://yourapp.com/verify?token={}", new_verification_token))
+                .body(format!("Please verify your email by clicking this link: http://127.0.0.1:8080/api/verify?token={}", verification_token))
                 .unwrap();
 
-            let mailer = SmtpTransport::unencrypted_localhost();  
+            let creds = Credentials::new(config.smtp_username.clone(), config.smtp_password.clone());
+
+            let mailer = SmtpTransport::starttls_relay(&config.smtp_server)
+                .unwrap()
+                .credentials(creds)
+                .build();
+
 
             match mailer.send(&email) {
                 Ok(_) => HttpResponse::Ok().json("Verification email resent successfully"),
@@ -387,6 +410,7 @@ async fn resend_verification_email(
         Err(_) => HttpResponse::NotFound().json("User not found"),
     }
 }
+
 
 // Initialize user-related routes
 pub fn init_routes(cfg: &mut web::ServiceConfig) {
@@ -399,5 +423,6 @@ pub fn init_routes(cfg: &mut web::ServiceConfig) {
     )
     .route("/login", web::post().to(login))  // POST /login
     .route("/verify", web::post().to(verify_email))  // POST /verify
+    .route("/verify", web::get().to(verify_email))  // POST /verify
     .route("/resend-verification", web::post().to(resend_verification_email));  // POST /resend-verification
 }
